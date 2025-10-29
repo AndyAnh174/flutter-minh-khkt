@@ -125,8 +125,78 @@ class MlService {
     );
   }
 
+  Future<MlResult> processFile(String filePath, int rotationDegrees, int imageWidth, int imageHeight) async {
+    final inputImage = InputImage.fromFilePath(filePath);
+    final faces = await _faceDetector.processImage(inputImage);
+    final poses = await _poseDetector.processImage(inputImage);
+
+    String eyeState = 'unknown';
+    double? distance;
+    if (faces.isNotEmpty) {
+      final f = faces.first;
+      final lp = f.leftEyeOpenProbability;
+      final rp = f.rightEyeOpenProbability;
+      if (lp != null && rp != null) {
+        final avg = (lp + rp) / 2.0;
+        eyeState = avg < 0.3 ? 'closed' : 'open';
+      }
+    }
+
+    String poseStatus = 'unknown';
+    final Map<String, PointF> posePoints = {};
+    if (poses.isNotEmpty) {
+      poseStatus = 'straight';
+      final p = poses.first;
+      PointF? _get(PoseLandmarkType t) {
+        try {
+          final lm = p.landmarks[t];
+          if (lm == null) return null;
+          return PointF(lm.x, lm.y);
+        } catch (_) {
+          return null;
+        }
+      }
+      void setIf(String key, PoseLandmarkType t) {
+        final v = _get(t);
+        if (v != null) posePoints[key] = v;
+      }
+      setIf('nose', PoseLandmarkType.nose);
+      setIf('leftEye', PoseLandmarkType.leftEye);
+      setIf('rightEye', PoseLandmarkType.rightEye);
+      setIf('leftShoulder', PoseLandmarkType.leftShoulder);
+      setIf('rightShoulder', PoseLandmarkType.rightShoulder);
+      setIf('leftElbow', PoseLandmarkType.leftElbow);
+      setIf('rightElbow', PoseLandmarkType.rightElbow);
+      setIf('leftWrist', PoseLandmarkType.leftWrist);
+      setIf('rightWrist', PoseLandmarkType.rightWrist);
+      setIf('leftHip', PoseLandmarkType.leftHip);
+      setIf('rightHip', PoseLandmarkType.rightHip);
+      setIf('leftKnee', PoseLandmarkType.leftKnee);
+      setIf('rightKnee', PoseLandmarkType.rightKnee);
+      setIf('leftAnkle', PoseLandmarkType.leftAnkle);
+      setIf('rightAnkle', PoseLandmarkType.rightAnkle);
+
+      final ls = posePoints['leftShoulder'];
+      final rs = posePoints['rightShoulder'];
+      if (ls != null && rs != null) {
+        final dy = (ls.y - rs.y).abs();
+        final threshold = imageHeight * 0.04;
+        if (dy > threshold) poseStatus = 'not_straight';
+      }
+    }
+
+    return MlResult(
+      poseStatus: poseStatus,
+      eyeState: eyeState,
+      eyeDistanceCm: distance,
+      posePoints: posePoints,
+      imageWidth: imageWidth,
+      imageHeight: imageHeight,
+    );
+  }
+
   InputImage _toInputImage(CameraImage image, int rotationDegrees) {
-    // Gộp planes YUV420 thành bytes cho InputImage.fromBytes
+    // Chuyển YUV420 → bytes tuyến tính và cung cấp metadata tối thiểu
     final bytesBuilder = BytesBuilder();
     for (final Plane plane in image.planes) {
       bytesBuilder.add(plane.bytes);
@@ -136,6 +206,7 @@ class MlService {
     final ui.Size imageSize = ui.Size(image.width.toDouble(), image.height.toDouble());
     final InputImageRotation rotation = _rotationFromDegrees(rotationDegrees);
     final InputImageFormat format = InputImageFormat.yuv420;
+
     final metadata = InputImageMetadata(
       size: imageSize,
       rotation: rotation,
